@@ -440,9 +440,20 @@ def launch(hydra_config: DictConfig):
         step = checkpoint_manager.latest_step()
         pbar.update(step)
 
+    # Sharding Utils
+    mesh = jax.sharding.Mesh(jax.devices(), ('batch',))
+    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('batch'))
+    
+    def shard_batch(batch):
+        return jax.tree_util.tree_map(
+            lambda x: jax.device_put(x, sharding),
+            batch
+        )
+
     for _ in range(step, total_steps):
         _, batch, _ = next(data_iter)
         batch = {k: jnp.array(v) for k, v in batch.items()}
+        batch = shard_batch(batch)
         
         loss, carry = train_step(model, optimizer, carry, batch)
         
