@@ -1,6 +1,8 @@
-# Less is More: Recursive Reasoning with Tiny Networks
+This is NOT the original codebase for the paper "Less is More: Recursive Reasoning with Tiny Networks". The original codebase is available [here](https://github.com/SamsungSAILMontreal/TinyRecursiveModels).
 
-This is the codebase for the paper: "Less is More: Recursive Reasoning with Tiny Networks". TRM is a recursive reasoning approach that achieves amazing scores of 45% on ARC-AGI-1 and 8% on ARC-AGI-2 using a tiny 7M parameters neural network.
+# Less is More: Recursive Reasoning with Tiny Networks (JAX implementation)
+
+This is the JAX implementation of the original codebase for the paper: "Less is More: Recursive Reasoning with Tiny Networks". TRM is a recursive reasoning approach that achieves amazing scores of 45% on ARC-AGI-1 and 8% on ARC-AGI-2 using a tiny 7M parameters neural network.
 
 [Paper](https://arxiv.org/abs/2510.04871)
 
@@ -134,6 +136,39 @@ arch.H_cycles=3 arch.L_cycles=4 \
 ```
 
 *Runtime:* < 24 hours
+
+## JAX Implementation (TPU Support)
+
+This repository also includes a fully functional JAX/Flax implementation of TRM, optimized for TPU training (v3-8, v4, etc.).
+
+**Key Files:**
+- `pretrain_jax.py`: Main training script (feature parity with `pretrain.py`).
+- `models/trm_jax.py`: JAX implementation of the TRM architecture.
+
+**Running on TPU (Sudoku Example):**
+The JAX implementation supports **Data Parallelism (Sharding)** and **Gradient Checkpointing (Remat)** out of the box for efficient memory usage.
+
+```bash
+# Ensure you have jax[tpu] installed
+pip install -r requirements.txt
+
+run_name="pretrain_jax_sudoku"
+python3 pretrain_jax.py \
+    arch=trm \
+    data_paths="['data/sudoku-extreme-1k-aug-1000']" \
+    evaluators="[]" \
+    epochs=50000 \
+    eval_interval=5000 \
+    lr=1e-4 \
+    puzzle_emb_lr=1e-4 \
+    weight_decay=1.0 \
+    puzzle_emb_weight_decay=1.0 \
+    arch.L_layers=2 \
+    arch.H_cycles=3 \
+    arch.L_cycles=6 \
+    +run_name=${run_name} \
+    ema=True
+```
 
 ## Reference
 
