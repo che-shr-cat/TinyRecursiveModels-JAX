@@ -405,7 +405,7 @@ def launch(hydra_config: DictConfig):
     
     # Training Loop
     step = 0
-    total_steps = 1000 # Debug
+
     
     pbar = tqdm.tqdm(total=total_steps)
     
