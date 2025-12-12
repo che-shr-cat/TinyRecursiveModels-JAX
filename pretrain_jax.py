@@ -103,54 +103,79 @@ def train_step(model: TinyRecursiveReasoningModel_ACTV1, optimizer: nnx.Optimize
         logits = outputs["logits"] # [B, L, V]
         targets = batch["labels"] # [B, L]
         
-        # Cross Entropy Loss
-        # Targets are indices.
-        # logits: [B, L, V]
-        # targets: [B, L]
-        
-        # Mask ignore labels (-100)
+        # Masks
         mask = targets != -100
+        loss_counts = jnp.sum(mask, axis=-1)
+        loss_divisor = jnp.maximum(loss_counts, 1.0)[:, None]
         
-        # Optax softmax_cross_entropy takes logits and one-hot labels, or we can use sparse
-        loss = optax.softmax_cross_entropy_with_integer_labels(logits, jnp.maximum(targets, 0))
-        loss = jnp.where(mask, loss, 0.0)
-        loss = jnp.sum(loss) / jnp.maximum(jnp.sum(mask), 1.0)
+        # LM Loss
+        loss_per_token = optax.softmax_cross_entropy_with_integer_labels(logits, jnp.maximum(targets, 0))
+        loss_per_token = jnp.where(mask, loss_per_token, 0.0)
+        lm_loss = jnp.sum(loss_per_token) / jnp.maximum(jnp.sum(mask), 1.0) # Mean over all valid tokens in batch
         
-        # Deep Supervision: Sum loss over ACT steps?
-        # The model returns outputs for ONE step of ACT.
-        # The training loop needs to run multiple steps?
-        # Wait, TRM ACT usually runs N steps PER BATCH ITEM.
-        # But the model.forward() does ONE step of ACT logic (updates steps, halted, etc).
-        # So we need to loop OUTSIDE?
-        # PyTorch `train_batch` calls `train_state.model(..., return_keys=[])`.
-        # In PyTorch `TinyRecursiveReasoningModel_ACTV1.forward`:
-        # It does ONE step of inner model.
-        # It returns `new_carry`.
+        # Metrics Calculation matches ACTLossHead
+        preds = jnp.argmax(logits, axis=-1)
+        is_correct = mask & (preds == targets)
+        seq_is_correct = jnp.sum(is_correct, axis=-1) == loss_counts
         
-        # Ah, the PyTorch training loop calls it ONCE per batch?
-        # No, `train_batch` in `pretrain.py`:
-        # `train_state.carry, loss, metrics, _, _ = train_state.model(...)`
-        # It seems it runs ONE step of the ACT process per optimizer step?
-        # This implies "Online ACT" where we process a stream of data?
-        # "TinyRecursiveModels-JAX/models/recursive_reasoning/trm.py":
-        # `forward` returns `new_carry`.
+        # Q Losses
+        # q_halt_logits: [B], q_continue_logits: [B]
+        # target: seq_is_correct (float)
+        q_halt_logits = outputs["q_halt_logits"]
+        q_continue_logits = outputs["q_continue_logits"]
         
-        # If the model is processing a sequence of puzzles, and each puzzle takes N steps to solve...
-        # The dataloader yields a stream of puzzles.
-        # The model keeps a `carry` of current puzzles being solved.
-        # When a puzzle halts, it is replaced by a new one from the batch.
-        # So `train_step` should indeed run ONE step of this process.
+        q_halt_loss = optax.sigmoid_binary_cross_entropy(q_halt_logits, seq_is_correct.astype(jnp.float32))
+        q_halt_loss = jnp.sum(q_halt_loss) # Sum reduction as in PyTorch
         
-        return loss, (new_carry, outputs)
+        q_continue_loss = 0.0
+        if "target_q_continue" in outputs:
+            q_continue_loss = optax.sigmoid_binary_cross_entropy(q_continue_logits, outputs["target_q_continue"])
+            q_continue_loss = jnp.sum(q_continue_loss)
+
+        # PyTorch Loss: lm_loss (sum / divisor) + 0.5 * (q_halt + q_cont)
+        # Note: PyTorch lm_loss div is per-sequence counts, then summed.
+        # My lm_loss above is global mean. 
+        # PyTorch: (loss / loss_divisor).sum() -> Sum of mean-sequence-losses.
+        # Let's match PyTorch:
+        lm_loss_sum = jnp.sum(jnp.sum(loss_per_token, axis=-1) / loss_divisor.squeeze(-1))
+        
+        total_loss = lm_loss_sum + 0.5 * (q_halt_loss + q_continue_loss)
+        
+        # Metrics dict
+        # valid_metrics = new_carry.halted & (loss_counts > 0)
+        valid_metrics = new_carry.halted & (loss_counts > 0)
+        valid_count = jnp.sum(valid_metrics)
+        
+        # Acuracy: (is_correct / loss_divisor).sum(-1) masked by valid
+        seq_acc = jnp.sum(is_correct, axis=-1) / loss_divisor.squeeze(-1)
+        accuracy = jnp.sum(jnp.where(valid_metrics, seq_acc, 0.0))
+        
+        exact_accuracy = jnp.sum(valid_metrics & seq_is_correct)
+        
+        q_halt_accuracy = jnp.sum(valid_metrics & ((q_halt_logits >= 0) == seq_is_correct))
+        
+        steps = jnp.sum(jnp.where(valid_metrics, new_carry.steps, 0))
+
+        metrics = {
+            "loss": total_loss,
+            "lm_loss": lm_loss_sum,
+            "q_halt_loss": q_halt_loss,
+            "q_continue_loss": q_continue_loss,
+            "count": valid_count,
+            "accuracy": accuracy,
+            "exact_accuracy": exact_accuracy,
+            "q_halt_accuracy": q_halt_accuracy,
+            "steps": steps
+        }
+        
+        return total_loss, (new_carry, metrics)
 
     grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
-    (loss, (new_carry, outputs)), grads = grad_fn(model, carry, batch, rngs)
+    (loss, (new_carry, metrics)), grads = grad_fn(model, carry, batch, rngs)
     
     optimizer.update(grads)
     
-    optimizer.update(grads)
-    
-    return loss, new_carry
+    return loss, new_carry, metrics
 
 # --- Evaluation ---
 
@@ -456,7 +481,7 @@ def launch(hydra_config: DictConfig):
         batch = {k: jnp.array(v) for k, v in batch.items()}
         batch = shard_batch(batch)
         
-        loss, carry = train_step(model, optimizer, carry, batch, rngs=rngs)
+        loss, carry, metrics = train_step(model, optimizer, carry, batch, rngs=rngs)
         
         if ema_params is not None:
              current_params = nnx.state(model, nnx.Param)
@@ -464,9 +489,13 @@ def launch(hydra_config: DictConfig):
         
         # Logging
         if step % 10 == 0:
-            pbar.set_description(f"Loss: {loss:.4f}")
+            pbar.set_description(f"Loss: {loss:.4f} | Acc: {metrics['accuracy']:.4f}")
             if wandb.run is not None:
-                wandb.log({"loss": loss, "step": step, "lr": scheduler(step)})
+                log_dict = {"loss": loss, "step": step, "lr": scheduler(step)}
+                # Add prefixes
+                for k, v in metrics.items():
+                    log_dict[f"train/{k}"] = v
+                wandb.log(log_dict)
             
         # Checkpointing
         if hydra_config.get("checkpoint_path") and step % hydra_config.eval_interval == 0:
