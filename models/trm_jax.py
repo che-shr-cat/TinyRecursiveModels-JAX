@@ -88,6 +88,7 @@ class TinyRecursiveReasoningModel_ACTV1Block(nnx.Module):
         )
         self.norm_eps = config.rms_norm_eps
 
+    @nnx.remat
     def __call__(self, hidden_states: jax.Array, cos_sin: Optional[tuple[jax.Array, jax.Array]] = None) -> jax.Array:
         # Self Attention
         # Note: RMSNorm in PyTorch impl is applied BEFORE adding residual? 

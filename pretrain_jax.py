@@ -102,6 +102,7 @@ def train_step(model: TinyRecursiveReasoningModel_ACTV1, optimizer: nnx.Optimize
         
         logits = outputs["logits"] # [B, L, V]
         targets = batch["labels"] # [B, L]
+        batch_size = logits.shape[0]
         
         # Masks
         mask = targets != -100
@@ -168,7 +169,8 @@ def train_step(model: TinyRecursiveReasoningModel_ACTV1, optimizer: nnx.Optimize
             "steps": steps
         }
         
-        return total_loss, (new_carry, metrics)
+        # PyTorch minimizes (1/B) * SumLoss
+        return total_loss / batch_size, (new_carry, metrics)
 
     grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
     (loss, (new_carry, metrics)), grads = grad_fn(model, carry, batch, rngs)
@@ -373,10 +375,8 @@ def launch(hydra_config: DictConfig):
     # 1. Clip global norm (applies to gradients of all params)
     # 2. Multi-transform for optimizer updates
     
-    optimizer_def = optax.chain(
-        optax.clip_by_global_norm(1.0),
-        optax.multi_transform(
-            {
+    optimizer_def = optax.multi_transform(
+        {
                 "common": optax.adamw(
                     learning_rate=scheduler,
                     weight_decay=hydra_config.weight_decay,
@@ -392,7 +392,6 @@ def launch(hydra_config: DictConfig):
             },
             param_labels
         )
-    )
 
     optimizer = nnx.Optimizer(model, optimizer_def)
     
