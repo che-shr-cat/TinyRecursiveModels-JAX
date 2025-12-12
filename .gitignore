@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+data/
+.venv/
+venv/
+checkpoints/
+outputs/
+.DS_Store
