@@ -94,11 +94,11 @@ def create_dataloader(config: PretrainConfig, split: str, **kwargs):
 # --- Training Step ---
 
 @nnx.jit
-def train_step(model: TinyRecursiveReasoningModel_ACTV1, optimizer: nnx.Optimizer, carry: TinyRecursiveReasoningModel_ACTV1Carry, batch: Dict[str, jax.Array]):
+def train_step(model: TinyRecursiveReasoningModel_ACTV1, optimizer: nnx.Optimizer, carry: TinyRecursiveReasoningModel_ACTV1Carry, batch: Dict[str, jax.Array], rngs: nnx.Rngs):
     
-    def loss_fn(model, carry, batch):
+    def loss_fn(model, carry, batch, rngs):
         # Forward
-        new_carry, outputs = model(carry, batch)
+        new_carry, outputs = model(carry, batch, rngs=rngs)
         
         logits = outputs["logits"] # [B, L, V]
         targets = batch["labels"] # [B, L]
@@ -144,7 +144,7 @@ def train_step(model: TinyRecursiveReasoningModel_ACTV1, optimizer: nnx.Optimize
         return loss, (new_carry, outputs)
 
     grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
-    (loss, (new_carry, outputs)), grads = grad_fn(model, carry, batch)
+    (loss, (new_carry, outputs)), grads = grad_fn(model, carry, batch, rngs)
     
     optimizer.update(grads)
     
@@ -456,7 +456,7 @@ def launch(hydra_config: DictConfig):
         batch = {k: jnp.array(v) for k, v in batch.items()}
         batch = shard_batch(batch)
         
-        loss, carry = train_step(model, optimizer, carry, batch)
+        loss, carry = train_step(model, optimizer, carry, batch, rngs=rngs)
         
         if ema_params is not None:
              current_params = nnx.state(model, nnx.Param)
