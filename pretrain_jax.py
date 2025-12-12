@@ -11,7 +11,7 @@ import numpy as np
 import tqdm
 import wandb
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 import pydantic
 from typing import List, Optional, Any, Dict
 from dataclasses import dataclass
@@ -304,7 +304,8 @@ def launch(hydra_config: DictConfig):
     
     # Init WandB
     if hydra_config.get("project_name"):
-        wandb.init(project=hydra_config.project_name, name=hydra_config.get("run_name"), config=hydra_config)
+        wandb_config = OmegaConf.to_container(hydra_config, resolve=True, throw_on_missing=True)
+        wandb.init(project=hydra_config.project_name, name=hydra_config.get("run_name"), config=wandb_config)
     
     # Differential Learning Rates & Weight Decay
     # We partition parameters into 'puzzle_emb' and 'common'.
