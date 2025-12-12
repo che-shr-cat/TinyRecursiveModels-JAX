@@ -306,10 +306,25 @@ def launch(hydra_config: DictConfig):
     if hydra_config.get("project_name"):
         wandb.init(project=hydra_config.project_name, name=hydra_config.get("run_name"), config=hydra_config)
     
-    # Scheduler
+    # Differential Learning Rates & Weight Decay
+    # We partition parameters into 'puzzle_emb' and 'common'.
+    params = nnx.state(model, nnx.Param)
+    
+    def map_param_to_group(path, param):
+        # path is a tuple of strings/ints
+        # Check if 'puzzle_emb' is in the path
+        if "puzzle_emb" in map(str, path):
+             return "puzzle_emb"
+        return "common"
+        
+    param_labels = jax.tree_util.tree_map_with_path(map_param_to_group, params)
+    
+    # Schedulers
+    # Total Steps
     total_steps = hydra_config.epochs * train_metadata.total_groups * train_metadata.mean_puzzle_examples // hydra_config.global_batch_size
     total_steps = int(total_steps)
-    
+
+    # Main scheduler
     scheduler = optax.warmup_cosine_decay_schedule(
         init_value=0.0,
         peak_value=hydra_config.lr,
@@ -318,56 +333,42 @@ def launch(hydra_config: DictConfig):
         end_value=hydra_config.lr * hydra_config.lr_min_ratio
     )
     
-    # Optimizer with Clipping
-    # Freeze Weights: Only train puzzle embeddings
-    if hydra_config.freeze_weights:
-        # We need to filter params.
-        # NNX allows traversing the graph.
-        # We can use optax.multi_transform to apply different optimizers to different parts.
-        # Or just set learning rate to 0 for non-puzzle-emb params.
-        
-        # Helper to identify puzzle embeddings
-        def is_puzzle_emb(path, param):
-            return "puzzle_emb" in path
-            
-        # Partition
-        # This requires traversing the state and creating a mask or partition.
-        # NNX's `state` returns a flatdict or nested dict.
-        # Let's use `optax.multi_transform`.
-        
-        # We need a way to map params to labels.
-        # NNX graph traversal?
-        # For now, let's use a simpler approach: mask gradients in the update step?
-        # Or just use `optax.masked`.
-        
-        # Actually, `nnx.Optimizer` takes the whole model.
-        # Let's use `optax.multi_transform` with a label function.
-        # But `nnx` doesn't expose the param tree structure directly to optax in the same way as Flax Linen?
-        # `nnx.Optimizer` handles the state update.
-        
-        # Let's stick to the simplest: if freeze_weights, we only want to update `puzzle_emb`.
-        # We can zero out gradients for everything else.
-        pass # Placeholder, implementing in train_step or via mask
-        
-        # Better: use `optax.masked`
-        # We need a mask matching the params structure.
-        params = nnx.state(model, nnx.Param)
-        mask = jax.tree_util.tree_map(lambda x: False, params)
-        # How to set True for puzzle_emb?
-        # We need to know the path.
-        # `nnx.graph.iter_graph`?
-        
-        # Let's assume for now we just want to run simple training.
-        # Implementing robust freeze weights in NNX might require more investigation on path access.
-        # For now, I will skip complex freezing logic and just warn if enabled, 
-        # OR I can try to find the `puzzle_emb` node.
-        
-        print("WARNING: Freeze weights implemented via gradient masking (simplified).")
-        
-    optimizer = nnx.Optimizer(model, optax.chain(
+    # Puzzle Emb Scheduler
+    # Assuming same schedule shape but potentially different peak
+    puzzle_emb_scheduler = optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=hydra_config.puzzle_emb_lr,
+        warmup_steps=hydra_config.lr_warmup_steps, # Assuming same warmup
+        decay_steps=total_steps,
+        end_value=hydra_config.puzzle_emb_lr * hydra_config.lr_min_ratio
+    )
+
+    # Optimizer Chain
+    # 1. Clip global norm (applies to gradients of all params)
+    # 2. Multi-transform for optimizer updates
+    
+    optimizer_def = optax.chain(
         optax.clip_by_global_norm(1.0),
-        optax.adamw(learning_rate=scheduler, weight_decay=hydra_config.weight_decay, b1=hydra_config.beta1, b2=hydra_config.beta2)
-    ))
+        optax.multi_transform(
+            {
+                "common": optax.adamw(
+                    learning_rate=scheduler,
+                    weight_decay=hydra_config.weight_decay,
+                    b1=hydra_config.beta1,
+                    b2=hydra_config.beta2
+                ),
+                "puzzle_emb": optax.adamw(
+                    learning_rate=puzzle_emb_scheduler,
+                    weight_decay=hydra_config.puzzle_emb_weight_decay,
+                    b1=hydra_config.beta1,
+                    b2=hydra_config.beta2
+                ),
+            },
+            param_labels
+        )
+    )
+
+    optimizer = nnx.Optimizer(model, optimizer_def)
     
     # EMA
     ema = None
