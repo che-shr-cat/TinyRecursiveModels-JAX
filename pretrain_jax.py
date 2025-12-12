@@ -494,7 +494,7 @@ def launch(hydra_config: DictConfig):
             # count-dependent -> divide by count
             
             count = metrics["count"]
-            count_safe = jax.lax.max(count, 1.0)
+            count_safe = jnp.maximum(count, 1.0)
             
             # Helper to convert to python scalar for logging
             def to_scalar(x): return x.item() if hasattr(x, "item") else float(x)
