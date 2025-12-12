@@ -166,3 +166,6 @@ and the Hierarchical Reasoning Model (HRM):
 ```
 
 This code is based on the Hierarchical Reasoning Model [code](https://github.com/sapientinc/HRM) and the Hierarchical Reasoning Model Analysis [code](https://github.com/arcprize/hierarchical-reasoning-model-analysis).
+
+
+Google AI Developer Programs team supported this work (porting to JAX) by providing Google Cloud Credit
