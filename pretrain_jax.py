@@ -379,8 +379,10 @@ def launch(hydra_config: DictConfig):
     # 1. Clip global norm (applies to gradients of all params)
     # 2. Multi-transform for optimizer updates
     
-    optimizer_def = optax.multi_transform(
-        {
+    optimizer_def = optax.chain(
+        optax.clip_by_global_norm(1.0),
+        optax.multi_transform(
+            {
                 "common": optax.adamw(
                     learning_rate=scheduler,
                     weight_decay=hydra_config.weight_decay,
@@ -396,6 +398,7 @@ def launch(hydra_config: DictConfig):
             },
             param_labels
         )
+    )
 
     optimizer = nnx.Optimizer(model, optimizer_def)
     

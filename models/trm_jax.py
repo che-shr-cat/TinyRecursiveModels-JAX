@@ -69,8 +69,23 @@ class TinyRecursiveReasoningModel_ACTV1Block(nnx.Module):
         self.config = config
         
         if self.config.mlp_t:
-             # Not implementing MLP-T for now as it seems experimental/specific
-             raise NotImplementedError("MLP-T not supported yet")
+             # Logic for MLP-T: Use a SwiGLU instead of Attention
+             # hidden_size calculation might differ? Check PyTorch
+             # PyTorch: mlp_t = SwiGLU(hidden_size=seq_len + puzzle_emb_len, expansion=expansion)
+             # Wait, in PyTorch it operates on the SEQUENCE dimension?
+             # "hidden_size=self.config.seq_len + self.puzzle_emb_len"
+             # Yes, it mixes across the sequence length.
+             
+             # We need L?
+             self.puzzle_emb_len = -(self.config.puzzle_emb_ndim // -self.config.hidden_size) if self.config.puzzle_emb_len == 0 else self.config.puzzle_emb_len
+             self.seq_len_total = self.config.seq_len + self.puzzle_emb_len
+             
+             self.mlp_t = SwiGLU(
+                 hidden_size=self.seq_len_total,
+                 expansion=config.expansion,
+                 rngs=rngs,
+                 name="mlp_t"
+             )
         else:
             self.self_attn = Attention(
                 hidden_size=config.hidden_size,
@@ -84,27 +99,44 @@ class TinyRecursiveReasoningModel_ACTV1Block(nnx.Module):
         self.mlp = SwiGLU(
             hidden_size=config.hidden_size,
             expansion=config.expansion,
-            rngs=rngs
+            rngs=rngs,
+            name="mlp"
         )
         self.norm_eps = config.rms_norm_eps
 
     @nnx.remat
     def __call__(self, hidden_states: jax.Array, cos_sin: Optional[tuple[jax.Array, jax.Array]] = None) -> jax.Array:
-        # Self Attention
-        # Note: RMSNorm in PyTorch impl is applied BEFORE adding residual? 
-        # Checking PyTorch code:
-        # hidden_states = rms_norm(hidden_states + self.self_attn(...))
-        # This is Post-Norm with residual inside the norm? No, it's:
-        # out = attn(x)
-        # x = norm(x + out)
+        if self.config.mlp_t:
+            # MLP-T operates on Transposed [B, D, L] effectively?
+            # PyTorch:
+            # hidden_states = hidden_states.transpose(1,2) # [B, D, L]
+            # out = self.mlp_t(hidden_states)
+            # hidden_states = rms_norm(hidden_states + out)
+            # hidden_states = hidden_states.transpose(1,2) # [B, L, D]
+            
+            # JAX SwiGLU normally expects [..., Features].
+            # Here "Features" is L (seq_len + puzzle_len).
+            # So we move L to the end.
+            # Input: [B, L, D]
+            
+            x_T = hidden_states.transpose(0, 2, 1) # [B, D, L]
+            
+            # SwiGLU acts on last dim (L)
+            out = self.mlp_t(x_T)
+            
+            # Residual + Norm
+            x_T = self._rms_norm(x_T + out)
+            
+            # Transpose back
+            hidden_states = x_T.transpose(0, 2, 1) # [B, L, D]
+            
+        else:
+            # Self Attention
+            attn_out = self.self_attn(hidden_states, cos_sin=cos_sin)
+            hidden_states = self._rms_norm(hidden_states + attn_out)
         
-        attn_out = self.self_attn(hidden_states, cos_sin=cos_sin)
-        
-        # Manual RMSNorm to match PyTorch implementation exactly
-        # PyTorch: rms_norm(hidden_states + attn_out)
-        hidden_states = self._rms_norm(hidden_states + attn_out)
-        
-        # MLP
+        # MLP (Token-wise)
+        # [B, L, D]
         mlp_out = self.mlp(hidden_states)
         hidden_states = self._rms_norm(hidden_states + mlp_out)
         
