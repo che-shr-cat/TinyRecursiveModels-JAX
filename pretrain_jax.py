@@ -331,11 +331,6 @@ def launch(hydra_config: DictConfig):
     model = TinyRecursiveReasoningModel_ACTV1(model_config, rngs=rngs)
     
     # Init WandB
-    if not hydra_config.get("project_name"):
-        # Default to trm-jax-repro if not specified, to ensure logging happens
-        print("WARNING: No project_name specified, defaulting to 'trm-jax-repro'")
-        hydra_config.project_name = "trm-jax-repro"
-
     if hydra_config.get("project_name"):
         wandb_config = OmegaConf.to_container(hydra_config, resolve=True, throw_on_missing=True)
         wandb.init(project=hydra_config.project_name, name=hydra_config.get("run_name"), config=wandb_config)
