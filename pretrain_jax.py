@@ -86,9 +86,9 @@ def create_dataloader(config: PretrainConfig, split: str, **kwargs):
         batch_size=None, # Dataset yields batches
         num_workers=0,
         prefetch_factor=None,
-        persistent_workers=False,
-        collate_fn=numpy_collate
+        persistent_workers=False
     )
+
     return dataloader, dataset.metadata
 
 # --- Training Step ---
@@ -539,7 +539,7 @@ def launch(hydra_config: DictConfig):
                 wandb.log(log_dict)
             
         # Checkpointing
-        if step % hydra_config.eval_interval == 0:
+        if step > 0 and step % hydra_config.eval_interval == 0:
              # Eval
              if ema_params is not None:
                  print("Evaluating with EMA parameters...")
