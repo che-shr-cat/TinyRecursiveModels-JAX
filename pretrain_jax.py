@@ -240,7 +240,8 @@ def evaluate(model, dataloader, step):
     # In PyTorch `create_dataloader` for test: `epochs_per_iter=1`.
     # It should yield the whole dataset once.
     
-    for batch in tqdm.tqdm(dataloader, desc="Evaluating"):
+    for batch_item in tqdm.tqdm(dataloader, desc="Evaluating"):
+        _, batch, _ = batch_item
         # Collate is already done by dataloader
         # Convert to JAX
         batch = {k: jnp.array(v) for k, v in batch.items()}
