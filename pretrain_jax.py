@@ -542,7 +542,7 @@ def launch(hydra_config: DictConfig):
              # Eval
              if ema_params is not None:
                  print("Evaluating with EMA parameters...")
-                 eval_model = nnx.merge(nnx.graph(model), ema_params)
+                 eval_model = nnx.merge(nnx.split(model)[0], ema_params)
                  evaluate(eval_model, test_loader, step)
              else:
                  evaluate(model, test_loader, step)
