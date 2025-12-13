@@ -83,8 +83,7 @@ class TinyRecursiveReasoningModel_ACTV1Block(nnx.Module):
              self.mlp_t = SwiGLU(
                  hidden_size=self.seq_len_total,
                  expansion=config.expansion,
-                 rngs=rngs,
-                 name="mlp_t"
+                 rngs=rngs
              )
         else:
             self.self_attn = Attention(
@@ -99,8 +98,7 @@ class TinyRecursiveReasoningModel_ACTV1Block(nnx.Module):
         self.mlp = SwiGLU(
             hidden_size=config.hidden_size,
             expansion=config.expansion,
-            rngs=rngs,
-            name="mlp"
+            rngs=rngs
         )
         self.norm_eps = config.rms_norm_eps
 

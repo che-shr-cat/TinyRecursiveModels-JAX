@@ -354,6 +354,13 @@ def launch(hydra_config: DictConfig):
     total_steps = hydra_config.epochs * train_metadata.total_groups * train_metadata.mean_puzzle_examples // hydra_config.global_batch_size
     total_steps = int(total_steps)
 
+    print(f"DEBUG: Total Steps Calculation:")
+    print(f"  Epochs: {hydra_config.epochs}")
+    print(f"  Total Groups: {train_metadata.total_groups}")
+    print(f"  Mean Puzzle Examples: {train_metadata.mean_puzzle_examples}")
+    print(f"  Global Batch Size: {hydra_config.global_batch_size}")
+    print(f"  Calculated Total Steps: {total_steps}")
+
     config_seed = hydra_config.seed
 
     # Main scheduler
@@ -531,13 +538,19 @@ def launch(hydra_config: DictConfig):
                 wandb.log(log_dict)
             
         # Checkpointing
-        if hydra_config.get("checkpoint_path") and step % hydra_config.eval_interval == 0:
-             # Save
-             save_args = ocp.args.StandardSave(nnx.state(model, optimizer))
-             checkpoint_manager.save(step, args=save_args)
-             
-             # Evaluate
-             evaluate(model, test_loader, step)
+        if step % hydra_config.eval_interval == 0:
+             # Eval
+             if ema_params is not None:
+                 print("Evaluating with EMA parameters...")
+                 eval_model = nnx.merge(nnx.graph(model), ema_params)
+                 evaluate(eval_model, test_loader, step)
+             else:
+                 evaluate(model, test_loader, step)
+
+             # Checkpoint
+             if hydra_config.get("checkpoint_path"):
+                 save_args = ocp.args.StandardSave(nnx.state(model, optimizer))
+                 checkpoint_manager.save(step, args=save_args)
              
         pbar.update(1)
         step += 1
