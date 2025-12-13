@@ -349,8 +349,12 @@ def launch(hydra_config: DictConfig):
     
     # Schedulers
     # Total Steps
+    # Schedulers
+    # Total Steps
     total_steps = hydra_config.epochs * train_metadata.total_groups * train_metadata.mean_puzzle_examples // hydra_config.global_batch_size
     total_steps = int(total_steps)
+
+    config_seed = hydra_config.seed
 
     # Main scheduler
     scheduler = optax.warmup_cosine_decay_schedule(
@@ -480,7 +484,10 @@ def launch(hydra_config: DictConfig):
         batch = {k: jnp.array(v) for k, v in batch.items()}
         batch = shard_batch(batch)
         
-        loss, carry, metrics = train_step(model, optimizer, carry, batch, rngs=rngs)
+        # Per-step RNG
+        step_rng = nnx.Rngs(config_seed + step)
+        
+        loss, carry, metrics = train_step(model, optimizer, carry, batch, rngs=step_rng)
         
         if ema_params is not None:
              current_params = nnx.state(model, nnx.Param)
