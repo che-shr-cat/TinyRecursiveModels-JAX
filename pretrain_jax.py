@@ -223,13 +223,20 @@ def eval_step(model: TinyRecursiveReasoningModel_ACTV1, batch: Dict[str, jax.Arr
     correct = (preds == targets) & mask
     accuracy = jnp.sum(correct) / jnp.maximum(jnp.sum(mask), 1.0)
     
-    return loss, accuracy
+    # Exact Accuracy (all tokens in sequence must be correct)
+    # Mask out non-target tokens
+    # Check if all valid tokens are correct
+    seq_is_correct = jnp.sum(correct, axis=-1) == jnp.sum(mask, axis=-1)
+    exact_accuracy = jnp.mean(seq_is_correct)
+
+    return loss, accuracy, exact_accuracy
 
 def evaluate(model, dataloader, step):
     print(f"Running evaluation at step {step}...")
     
     total_loss = 0.0
     total_acc = 0.0
+    total_exact_acc = 0.0
     count = 0
     
     # We need to iterate the dataloader.
@@ -246,19 +253,21 @@ def evaluate(model, dataloader, step):
         # Convert to JAX
         batch = {k: jnp.array(v) for k, v in batch.items()}
         
-        loss, acc = eval_step(model, batch)
+        loss, acc, exact_acc = eval_step(model, batch)
         
         total_loss += loss.item()
         total_acc += acc.item()
+        total_exact_acc += exact_acc.item()
         count += 1
         
     avg_loss = total_loss / count if count > 0 else 0.0
     avg_acc = total_acc / count if count > 0 else 0.0
+    avg_exact_acc = total_exact_acc / count if count > 0 else 0.0
     
-    print(f"Eval Step {step}: Loss = {avg_loss:.4f}, Accuracy = {avg_acc:.4f}")
+    print(f"Eval Step {step}: Loss = {avg_loss:.4f}, Accuracy = {avg_acc:.4f}, Exact Acc = {avg_exact_acc:.4f}")
     
     if wandb.run is not None:
-        wandb.log({"eval/loss": avg_loss, "eval/accuracy": avg_acc, "step": step})
+        wandb.log({"eval/loss": avg_loss, "eval/accuracy": avg_acc, "eval/exact_accuracy": avg_exact_acc, "step": step})
         
     return avg_loss
 
@@ -504,39 +513,38 @@ def launch(hydra_config: DictConfig):
              current_params = nnx.state(model, nnx.Param)
              ema_params = update_ema(ema_params, current_params, hydra_config.ema_rate)
         
-        if step % 10 == 0:  
-            # Normalize metrics for logging
-            # metrics contains Sums.
-            # PyTorch logic:
-            # loss-like -> divide by global_batch_size
-            # count-dependent -> divide by count
-            
-            count = metrics["count"]
-            count_safe = jnp.maximum(count, 1.0)
-            
-            # Helper to convert to python scalar for logging
-            def to_scalar(x): return x.item() if hasattr(x, "item") else float(x)
-            
-            log_dict = {
-                "loss": to_scalar(loss), # Already normalized in loss_fn return
-                "step": step,
-                "lr": to_scalar(scheduler(step))
-            }
-            
-            for k, v in metrics.items():
-                v_scalar = to_scalar(v)
-                if k.endswith("loss"):
-                    # Losses are sums in metrics dict
-                    log_dict[f"train/{k}"] = v_scalar / hydra_config.global_batch_size
-                elif k == "count":
-                    log_dict[f"train/{k}"] = v_scalar
-                else:
-                    # Accuracy, steps, etc are sums over 'count' items
-                    log_dict[f"train/{k}"] = v_scalar / to_scalar(count_safe)
-            
-            pbar.set_description(f"Loss: {log_dict['loss']:.4f} | Acc: {log_dict['train/accuracy']:.4f} | Cnt: {metrics['count']}")
-            if wandb.run is not None:
-                wandb.log(log_dict)
+        # Normalize metrics for logging
+        # metrics contains Sums.
+        # PyTorch logic:
+        # loss-like -> divide by global_batch_size
+        # count-dependent -> divide by count
+        
+        count = metrics["count"]
+        count_safe = jnp.maximum(count, 1.0)
+        
+        # Helper to convert to python scalar for logging
+        def to_scalar(x): return x.item() if hasattr(x, "item") else float(x)
+        
+        log_dict = {
+            "loss": to_scalar(loss), # Already normalized in loss_fn return
+            "step": step,
+            "lr": to_scalar(scheduler(step))
+        }
+        
+        for k, v in metrics.items():
+            v_scalar = to_scalar(v)
+            if k.endswith("loss"):
+                # Losses are sums in metrics dict
+                log_dict[f"train/{k}"] = v_scalar / hydra_config.global_batch_size
+            elif k == "count":
+                log_dict[f"train/{k}"] = v_scalar
+            else:
+                # Accuracy, steps, etc are sums over 'count' items
+                log_dict[f"train/{k}"] = v_scalar / to_scalar(count_safe)
+        
+        pbar.set_description(f"Loss: {log_dict['loss']:.4f} | Acc: {log_dict['train/accuracy']:.4f} | Cnt: {metrics['count']}")
+        if wandb.run is not None:
+            wandb.log(log_dict)
             
         # Checkpointing
         if step > 0 and step % hydra_config.eval_interval == 0:
