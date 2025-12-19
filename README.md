@@ -6,7 +6,9 @@ This is the JAX implementation of the original codebase for the paper: "Less is 
 
 [Paper](https://arxiv.org/abs/2510.04871)
 
-The code still requires polishing and testing, I'm not 100% sure it works exactly as the original code. Because of the lack of GPU resources, I paused training the models. 
+This is my experiment of using [Antigravity](https://antigravity.google/) to do this job. The code still requires polishing and testing, I'm not 100% sure it works exactly as the original code. From what I see, the training process is still unstable and the model does not converge. 
+
+Because of the lack of GPU resources, I paused training the models. 
 
 I'm open to contributions if you want to help me improve it.
 
